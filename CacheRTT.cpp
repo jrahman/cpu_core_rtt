@@ -8,6 +8,10 @@
 #include <iostream>
 #include <immintrin.h>
 
+#ifdef TOPOLOGY
+#include <cpuid.h>
+#endif
+
 std::atomic_bool keepRunning = true;
 
 #define rdtsc __builtin_ia32_rdtsc
@@ -129,6 +133,46 @@ int main(int argc, char **argv)
 {
 
     int cores = atoi(argv[1]);
+
+// Enumerate topology information at startup for later analysis
+#ifdef TOPOLOGY
+    for (uint16_t idx = 0; idx < cores; idx++)
+    {
+
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(idx, &set);
+
+        pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+        sched_yield();
+
+        unsigned int eax, ebx, ecx, edx;
+        uint16_t type[5];
+        uint16_t siblings[5];
+        uint16_t level = 0;
+        for (level = 0; level < 5; level++)
+        {
+            ecx = level;
+            __get_cpuid_count(0x1F /* v2 extended topology leaf */, level, &eax, &ebx, &ecx, &edx);
+
+            std::cout << " eax: " << eax << ", ebx: " << ebx << ", ecx: " << ecx << ", edx: " << edx << std::endl;
+            siblings[level] = ebx;
+            type[level] = (ecx >> 8) & 0xff;
+            if (type[level] == 0)
+            {
+                break;
+            }
+        }
+        std::cout << "CPU: " << idx;
+        for (uint16_t idx = 0; idx <= level; idx++)
+        {
+            std::cout << ", level, " << level << ", type: " << type[idx] << ", siblings: " << siblings[idx];
+        }
+        std::cout << std::endl;
+    }
+#endif
+
+    return 0;
 
     for (uint16_t idx = 0; idx < cores; idx++)
     {
