@@ -6,50 +6,44 @@
 #include <pthread.h>
 #include <sched.h>
 #include <iostream>
-
-#include "Util.h"
-
-#ifdef __APPLE__
-
-#include <mach/thread_policy.h>
-#include <mach/task_info.h>
-#include <mach/thread_act.h>
-
-typedef struct cpu_set
-{
-    uint32_t count;
-} cpu_set_t;
-
-static inline void
-CPU_ZERO(cpu_set_t *cs) { cs->count = 0; }
-
-static inline void
-CPU_SET(int num, cpu_set_t *cs) { cs->count |= (1 << num); }
-
-static inline int
-CPU_ISSET(int num, cpu_set_t *cs) { return (cs->count & (1 << num)); }
-
-int pthread_setaffinity_np(pthread_t thread, size_t cpu_size,
-                           cpu_set_t *cpu_set)
-{
-    thread_port_t mach_thread = pthread_mach_thread_np(thread);
-    int core = 0;
-
-    for (; core < 8 * cpu_size; core++)
-    {
-        if (CPU_ISSET(core, cpu_set))
-            break;
-    }
-    thread_affinity_policy_data_t policy = {core};
-    thread_policy_set(mach_thread, THREAD_AFFINITY_POLICY,
-                      (thread_policy_t)&policy, 1);
-    return 0;
-}
-#endif
+#include <immintrin.h>
 
 std::atomic_bool keepRunning = true;
 
-// TODO 128 byte cache lines for M1
+#define rdtsc __builtin_ia32_rdtsc
+
+#ifdef PAUSE_NOP
+
+#define pause() \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop"); \
+    asm("nop");
+
+#else
+#define pause() _mm_pause()
+#endif
+
 constexpr auto kCacheLineSize = 64;
 
 struct
@@ -89,7 +83,7 @@ void client(uint16_t core)
         uint64_t originalResp = resp;
         while ((resp = data.serverToClientChannel.load(std::memory_order_seq_cst)) == originalResp)
         {
-            mm_pause();
+            pause();
         }
 
         localTickRespReceive = rdtsc();
@@ -122,7 +116,7 @@ void server(uint16_t core)
         auto originalTick = remoteTickReqSend;
         while ((remoteTickReqSend = data.clientToServerChannel.load()) == originalTick)
         {
-            mm_pause();
+            pause();
         }
 
         localTickReqReceived = rdtsc();
@@ -158,7 +152,7 @@ int main(int argc, char **argv)
                                          client(jdx);
                                      }};
 
-            std::this_thread::sleep_for(std::chrono::milliseconds{1000});
+            std::this_thread::sleep_for(std::chrono::milliseconds{250});
 
             std::cerr << "Cleaning up threads..." << std::endl;
 
